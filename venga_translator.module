@@ -1,34 +1,448 @@
 <?php
+
 /**
  * @file
- * Code for the venga_translator module.
+ * Module file of the venga translation management module.
  */
+
+use Drupal\venga_translator\VengaTranslatorAdapter;
+use Drupal\tmgmt\TranslatorInterface;
+use Drupal\Core\Queue\QueueFactory;
+use Drupal\tmgmt\Entity\Translator;
+use Drupal\tmgmt\Entity\Job;
+use Drupal\Core\Form\FormStateInterface;
+use drunomics\XtrfClient\XtrfRequestSslInsecure;
+use GuzzleHttp\Exception\RequestException;
 
 /**
- * Implements hook_form_FORM_ID_alter() for the tmgmt_job_form() form.
+ * Gets the Venga adapter.
+ *
+ * @param \Drupal\tmgmt\TranslatorInterface $translator
+ *   The tmgmt translator.
+ * @param \Drupal\Core\File\FileSystemInterface $file_system
+ *   (optional) File system, Drupal file_system service by default.
+ * @param \Psr\Log\LoggerInterface $logger
+ *   (optional) Logger, 'venga_translator' logging chanel by default.
+ *
+ * @return \Drupal\venga_translator\VengaTranslatorAdapter|null
+ *   The adapter, null if translator is not available.
  */
-function venga_translator_form_tmgmt_job_form_alter(&$form, &$form_state, $form_id) {
-  // Force the venga translator to be chosen and hide select.
-  if (!empty($form['translator_wrapper']['translator'])) {
-    $form['translator_wrapper']['translator']['#access'] = FALSE;
-    $form['translator_wrapper']['translator']['#value'] = 'venga_translator';
-    $form['translator_wrapper']['#title'] = t('Venga checkout settings');
-
-    // Hide nested fieldgroup.
-    $form['translator_wrapper']['settings']['#type'] = 'container';
+function venga_translator_adapter(TranslatorInterface $translator, $file_system = NULL, $logger = NULL) {
+  if (!$translator->checkAvailable()->getSuccess()) {
+    return NULL;
   }
-
-  $form['actions']['checkout']['#value'] = t('Submit to Venga');
-
-  // Hide save job button if there are many items in the queue as it does not
-  // redirect.
-  $form['actions']['submit']['#access'] = tmgmt_ui_redirect_queue_count() ? FALSE : TRUE;
+  $adapters = &drupal_static(__FUNCTION__);
+  if (!isset($adapters[$translator->id()])) {
+    if (!$logger) {
+      $logger = \Drupal::logger('venga_translator');
+    }
+    if (!$file_system) {
+      $file_system = \Drupal::service('file_system');
+    }
+    $config = [
+      'base_uri' => $translator->getSetting('url'),
+      'username' => $translator->getSetting('username'),
+      'password' => $translator->getSetting('password'),
+      'verify' => !$translator->getSetting('allow_insecure_connection'),
+    ];
+    $adapter = \drunomics\XtrfClient\XtrfClient::create($config);
+    $adapters[$translator->id()] = new VengaTranslatorAdapter($adapter, $file_system, $logger);
+  }
+  return $adapters[$translator->id()];
 }
 
 /**
- * Implements hook_block_view_MODULE_DELTA_alter() for the help block.
+ * Gets the Venga translator.
+ *
+ * There should be only one global Venga translator which is used for quotes
+ * creation.
+ *
+ * @return \Drupal\tmgmt\TranslatorInterface
+ *   The Venga translator
+ *
+ * @throws \LogicException
+ *
+ * @see \Drupal\venga_translator\Form\QuoteSettingsForm::submitForm()
  */
-function venga_translator_block_view_system_help_alter(&$data, $block) {
-  // Remove reference to TMGMT from help text.
-  $data['content'] = str_replace('TMGMT ', '', $data['content']);
+function venga_translator_get_translator() {
+  if (!$translator_id = \Drupal::config('venga_translator.settings')->get('translator')) {
+    throw new \LogicException('venga_translator.settings:translator config is not set.');
+  }
+
+  /* @var \Drupal\tmgmt\TranslatorInterface $translator */
+  $translator = Translator::load($translator_id);
+  if ($translator->getPluginId() != 'venga_translator') {
+    throw new \LogicException('Translator should have venga_translator plugin.');
+  }
+
+  return $translator;
+}
+
+/**
+ * Implements hook_cron().
+ *
+ * Queues fetching translation files.
+ */
+function venga_translator_cron() {
+  // Get all the Venga translator plugins.
+  $translators = [];
+  $result = \Drupal::entityQuery('tmgmt_translator')
+    ->condition('plugin', 'venga_translator')
+    ->execute();
+  if (!empty($result)) {
+    $translators = Translator::loadMultiple($result);
+  }
+
+  /** @var QueueFactory $queue_factory */
+  $queue_factory = \Drupal::service('queue');
+  /** @var Drupal\tmgmt\TranslatorInterface $translator */
+  foreach ($translators as $translator) {
+    if ($translator->checkAvailable()) {
+      $adapter = venga_translator_adapter($translator);
+
+      // Loads all the active translator jobs.
+      $jobs = [];
+      $result = \Drupal::entityQuery('tmgmt_job')
+        ->condition('translator', $translator->id())
+        ->condition('state', Job::STATE_ACTIVE)
+        // Skip jobs with a remote reference, those have been handled already
+        // and e.g. are waiting for queue processing.
+        ->condition('reference', NULL, 'IS NULL')
+        ->execute();
+      if (isset($result)) {
+        /* @var Drupal\tmgmt\JobInterface[] $jobs */
+        $jobs = Job::loadMultiple($result);
+      }
+
+      foreach ($jobs as $job) {
+        if ($has_output = $adapter->checkForTranslationOutput($job)) {
+          $queue = $queue_factory->get('venga_translator_retrieve_data');
+          $data = new \stdClass();
+          $data->tjid = $job->id();
+          $data->translator = $translator->id();
+          $queue->createItem($data);
+          \Drupal::logger('venga_translator')->info(
+            'Queued fetching translation files for job: %tjid: %label',
+            ['%tjid' => $job->id(), '%label' => $job->label()]
+          );
+        }
+        else {
+          \Drupal::logger('venga_translator')->info(
+            'No new translated files for job %tjid: %label',
+            ['%tjid' => $job->id(), '%label' => $job->label()]
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_type_alter().
+ *
+ * Overrides \Drupal\tmgmt\Entity\ListBuilder\JobListBuilder to change links.
+ */
+function venga_translator_entity_type_alter(array &$entity_types) {
+  /** @var $entity_types \Drupal\Core\Entity\EntityTypeInterface[] */
+  $entity_types['tmgmt_job']->setListBuilderClass('Drupal\venga_translator\Entity\ListBuilder\VengaJobListBuilder');
+}
+
+/**
+ * Implements hook_form_BASE_FORM_ID_alter().
+ */
+function venga_translator_form_tmgmt_content_translate_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+  // Register validation callback before others.
+  array_unshift($form['#validate'], 'venga_translator_form_tmgmt_content_translate_form_validate');
+
+  $form['actions']['description'] = [
+    '#type' => 'item',
+    '#markup' => t('"Request translation" - Creates a project or quote with this job.<br>"Add to cart" - Adds this job to the cart to be able to create a project or quote for multiple jobs.'),
+    '#weight' => -1,
+  ];
+}
+
+/**
+ * Validation callback for the tmgmt_content_translate_form.
+ */
+function venga_translator_form_tmgmt_content_translate_form_validate(array &$form, FormStateInterface $form_state) {
+  $selected = array_filter($form_state->getValue('languages'));
+  if (empty($selected)) {
+    // Override validation message.
+    $form_state->setErrorByName('languages', t('You have to select at least one language before requesting a translation.'));
+  }
+}
+
+/**
+ * Implements hook_form_BASE_FORM_ID_alter().
+ */
+function venga_translator_form_tmgmt_cart_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+  $form['request_quote'] = [
+    '#type' => 'submit',
+    '#button_type' => 'primary',
+    '#value' => t('Request quote'),
+    '#validate' => [
+      'tmgmt_cart_source_overview_validate',
+      'venga_translator_cart_source_overview_validate',
+    ],
+    '#submit' => ['venga_translator_cart_request_quote_submit'],
+    '#weight' => 10,
+  ];
+
+  // Bypass validations like "Request translation into language/s field is
+  // required." when remove items from cart.
+  // We should pass `['']` to limit_validation_errors to support the existing
+  // validation callback `tmgmt_cart_source_overview_validate()`.
+  // We should pass `['items']` to limit_validation_errors to support the
+  // Drupal\tmgmt\Forms\Cartform::submitRemoveSelected().
+  $form['remove_selected']['#limit_validation_errors'] = [[''], ['items']];
+
+  $form['target_language']['#required'] = TRUE;
+  $form['request_translation']['#access'] = FALSE;
+  $form['remove_selected']['#weight'] = 11;
+  $form['empty_cart']['#weight'] = 12;
+  $form['target_language']['#description'] = t('If the item\'s source language is the same as the target language the item will be ignored.');
+
+  // Do not select items in cart by default.
+  unset($form['items']['#default_value']);
+
+  // Group all the cart items by source language.
+  $source_languages = [];
+  foreach ($form['items']['#options'] as $key => $option) {
+    $source_languages[$option[2]][$key] = $key;
+  }
+
+  // There are several source languages for cart items.
+  if (count($source_languages) > 1) {
+    // Add frontend improvements in cart usability.
+    $form['#attached']['library'][] = 'venga_translator/cart_tweaks';
+
+    drupal_set_message(t('You can only request a quote for content with the same source language.'));
+    $form['#attached']['drupalSettings']['venga_translator']['cart_languages_map'] = $source_languages;
+  }
+  // There is the same source language for all cart items.
+  else {
+    // Don't display the language column in the table of items to be translated.
+    unset($form['items']['#header'][2]);
+    foreach ($form['items']['#options'] as &$option) {
+      unset($option[2]);
+    }
+
+    $source_language = key($source_languages);
+    // Don't display the source language in the select list of languages for
+    // translation.
+    if(($key = array_search($source_language, $form['target_language']['#options'])) !== false) {
+      unset($form['target_language']['#options'][$key]);
+    }
+  }
+}
+
+/**
+ * Implements hook_form_BASE_FORM_ID_alter().
+ *
+ * @see \Drupal\tmgmt\Form\JobItemForm::reviewFormElement()
+ */
+function venga_translator_form_tmgmt_job_item_edit_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id) {
+  // Add custom validation callback to clear unnecessary validation messages
+  // provided by TMGMT.
+  $form['actions']['validate_html']['#validate'][] = 'venga_translator_form_tmgmt_job_item_edit_form_validate';
+}
+
+/**
+ * Validation callback for HTML tags validation.
+ */
+function venga_translator_form_tmgmt_job_item_edit_form_validate(array $form, FormStateInterface $form_state) {
+  // Hide warning messages for HTML tags validation.
+  // @see $validation_messages at JobItemForm::validateTags()
+  $form_state->set('validation_messages', []);
+}
+
+/**
+ * Cart form validation callback for the source overview.
+ */
+function venga_translator_cart_source_overview_validate(array $form, FormStateInterface $form_state) {
+  if (!$translator_id = \Drupal::config('venga_translator.settings')->get('translator')) {
+    $form_state->setError($form, t('venga_translator.settings:translator config is not set.'));
+  }
+
+  /* @var \Drupal\tmgmt\TranslatorInterface $translator */
+  $translator = \Drupal::entityTypeManager()->getStorage('tmgmt_translator')->load($translator_id);
+  if ($translator->getPluginId() != 'venga_translator') {
+    $form_state->setError($form, t('Translator should have venga_translator plugin.'));
+  }
+
+  $item_ids = array_filter($form_state->getValue('items'));
+
+  /** @var \Drupal\tmgmt\JobItemInterface[] $items */
+  $items = array_values(\Drupal::entityTypeManager()->getStorage('tmgmt_job_item')->loadMultiple($item_ids));
+
+  // If no items are selection, tmgmt will cause a validation error. However,
+  // we can only do our validation if items have been selected.
+  if (!$items) {
+    return;
+  }
+
+  // Validate source language.
+  if ($form_state->getValue('enforced_source_language')) {
+    $source_language = $form_state->getValue('source_language');
+  }
+  else {
+    $source_language = $items[0]->getSourceLangCode();
+    foreach ($items as $item) {
+      if ($item->getSourceLangCode() != $source_language) {
+        $form_state->setError($form['items'], t('It is not possible to combine jobs with different source languages into a single quote. Please choose jobs with the same source language or use the "Enforce source language" setting.'));
+      }
+    }
+  }
+  foreach ($items as $item) {
+    if (!in_array($source_language, $item->getExistingLangCodes())) {
+      $form_state->setError($form['items'], t('From the selection you made it was not possible to create any translation job.'));
+    }
+    if ($item->getJobId()) {
+      $form_state->setError($form['items'], t('Only unprocessed job items are allowed.'));
+    }
+  }
+
+  // Validate target languages.
+  foreach (array_filter($form_state->getValue('target_language')) as $target_language) {
+    if ($target_language == $source_language) {
+      $form_state->setError($form['target_language'], t('Target language should be different from the source language'));
+    }
+  }
+}
+
+/**
+ * Custom form submit callback to request quote for tmgmt_cart_cart_form().
+ */
+function venga_translator_cart_request_quote_submit(array $form, FormStateInterface $form_state) {
+  $item_ids = array_filter($form_state->getValue('items'));
+  /** @var \Drupal\tmgmt\JobItemInterface[] $items */
+  $items = array_values(\Drupal::entityTypeManager()->getStorage('tmgmt_job_item')->loadMultiple($item_ids));
+
+  // Get source language.
+  $enforced_source_language = NULL;
+  if ($form_state->getValue('enforced_source_language')) {
+    $enforced_source_language = $form_state->getValue('source_language');
+    drupal_set_message(t('You have enforced the job source language which most likely resulted in having a translation of your original content as the job source text. You should review the job translation received from the translator carefully to prevent the content quality loss.'), 'warning');
+  }
+  $source_language = $enforced_source_language ? $enforced_source_language : $items[0]->getSourceLangCode();
+
+  $target_languages = array_filter($form_state->getValue('target_language'));
+
+  // Redirect to the quote creation page with pre-defined request parameters.
+  $form_state->setRedirect('entity.venga_translator_quote.add_form', [], [
+    'query' => [
+      'items' => $item_ids,
+      'source' => $source_language,
+      'targets' => $target_languages,
+    ],
+  ]);
+}
+
+/**
+ * Implements callback_allowed_values_function().
+ *
+ * Provides service options.
+ *
+ * @see options_allowed_values().
+ */
+function venga_translator_get_service_options(\Drupal\Core\Field\FieldStorageDefinitionInterface $definition, \Drupal\Core\Entity\FieldableEntityInterface $entity = NULL, &$cacheable = NULL) {
+  $translator = venga_translator_get_translator();
+  $options = [];
+
+  if ($adapter = venga_translator_adapter($translator)) {
+    try {
+      $services = $adapter->getServices();
+      foreach ($services as $service) {
+        $options[$service->getName()] = $service->getName();
+      }
+    }
+    catch (XtrfRequestSslInsecure $e) {
+      drupal_set_message(t('Cannot get services from XTRF server. A secure SSL connection could not be established. Please adjust your translation provider settings and contact your provider if this error persists.'), 'error');
+    }
+    catch (RequestException $e) {
+      drupal_set_message(t('Unable to connect to the XTRF server. Please verify your translation provider settings and contact your provider if this error persists.'), 'error');
+    }
+  }
+
+  return $options;
+}
+
+/**
+ * Implements callback_allowed_values_function().
+ *
+ * Provides service options.
+ *
+ * @see options_allowed_values().
+ */
+function venga_translator_get_specialization_options(\Drupal\Core\Field\FieldStorageDefinitionInterface $definition, \Drupal\Core\Entity\FieldableEntityInterface $entity = NULL, &$cacheable = NULL) {
+  $translator = venga_translator_get_translator();
+  $options = [];
+
+  if ($adapter = venga_translator_adapter($translator)) {
+    try {
+      $specializations = $adapter->getSpecializations();
+      foreach ($specializations as $specialization) {
+        $options[$specialization->getName()] = $specialization->getName();
+      }
+    }
+    catch (XtrfRequestSslInsecure $e) {
+      drupal_set_message(t('Cannot get specializations from XTRF server. A secure SSL connection could not be established. Please adjust your translation provider settings and contact your provider if this error persists.'), 'error');
+    }
+    catch (RequestException $e) {
+      drupal_set_message(t('Unable to connect to the XTRF server. Please verify your translation provider settings and contact your provider if this error persists.'), 'error');
+    }
+  }
+
+  return $options;
+}
+
+/**
+ * Implements callback_allowed_values_function().
+ *
+ * Provides persons options.
+ *
+ * @see options_allowed_values().
+ */
+function venga_translator_get_person_options(\Drupal\Core\Field\FieldStorageDefinitionInterface $definition, \Drupal\Core\Entity\FieldableEntityInterface $entity = NULL, &$cacheable = NULL) {
+  $translator = venga_translator_get_translator();
+  $options = [];
+
+  if ($adapter = venga_translator_adapter($translator)) {
+    try {
+      if ($persons = $adapter->getContactPersons()) {
+        foreach ($persons as $person) {
+          $options[$person->getId()] = $person->getName();
+        }
+      }
+    }
+    catch (XtrfRequestSslInsecure $e) {
+      drupal_set_message(t('Cannot get persons from XTRF server. A secure SSL connection could not be established. Please adjust your translation provider settings and contact your provider if this error persists.'), 'error');
+    }
+    catch (RequestException $e) {
+      drupal_set_message(t('Unable to connect to the XTRF server. Please verify your translation provider settings and contact your provider if this error persists.'), 'error');
+    }
+  }
+
+  return $options;
+}
+
+/**
+ * Implements hook_form_BASE_FORM_ID_alter().
+ */
+function venga_translator_form_tmgmt_translator_edit_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id) {
+  // We should add a custom submit callback because to change form redirect,
+  // because it is done on submit.
+  // @see Drupal\tmgmt\Form\TranslatorForm::save()
+  $form['actions']['submit']['#submit'][] = 'venga_translator_tmgmt_translator_edit_form_submit';
+}
+
+/**
+ * Submit callback for tmgmt_translator_edit_form.
+ */
+function venga_translator_tmgmt_translator_edit_form_submit($form, \Drupal\Core\Form\FormStateInterface $form_state) {
+  $storage = $form_state->getStorage();
+  if (!empty($storage['venga_translator_credentials_change'])) {
+    // Stay on the edit form if there was a credentials change.
+    $form_state->setRedirect('entity.tmgmt_translator.edit_form', ['tmgmt_translator' => $form_state->getValue('plugin')]);
+  }
 }

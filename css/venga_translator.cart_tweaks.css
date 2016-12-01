@@ -1,0 +1,8 @@
+/* Hide the checkbox to select all items in translation cart. */
+#tmgmt-cart-form .select-all .form-checkbox{
+  display: none;
+}
+
+#tmgmt-cart-form .is-disabled{
+  background: #f5f5f2;
+}

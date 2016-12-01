@@ -1,0 +1,24 @@
+{
+  "name": "drupal/venga_translator",
+  "description": "Venga Gateway Connect for Drupal",
+  "keywords": ["Venga", "Translator", "Gateway Connect", "TMGMT"],
+  "homepage": "https://www.drupal.org/project/venga_translator",
+  "license": "GPL-2.0+",
+  "authors": [
+    {
+      "name": "Wolfgang Ziegler",
+      "homepage": "https://www.drupal.org/u/fago"
+    },
+    {
+      "name": "Alex Milkovskyi",
+      "homepage": "https://www.drupal.org/u/amilkovsky"
+    }
+  ],
+  "support": {
+    "issues": "https://www.drupal.org/project/issues/venga_translator"
+  },
+  "type": "drupal-module",
+  "require": {
+    "drunomics/xtrf-rest-client": "^1.0"
+  }
+}

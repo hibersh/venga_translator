@@ -1,0 +1,14 @@
+cart_tweaks:
+  css:
+    theme:
+      css/venga_translator.cart_tweaks.css: {}
+  js:
+    js/venga_translator.cart_tweaks.js: {}
+
+request_button:
+  js:
+    js/venga_translator.request_button.js: {}
+
+datetime:
+  js:
+    js/venga_translator.datetime.js: {}

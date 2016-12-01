@@ -1,0 +1,17 @@
+# Quote routing definition
+venga_translator_quote.settings_tab:
+  route_name: venga_translator_quote.settings
+  title: 'Settings'
+  base_route: venga_translator_quote.settings
+
+entity.venga_translator_quote.canonical:
+  route_name: entity.venga_translator_quote.canonical
+  base_route: entity.venga_translator_quote.canonical
+  title: 'View'
+
+entity.venga_translator_quote.delete_form:
+  route_name:  entity.venga_translator_quote.delete_form
+  base_route:  entity.venga_translator_quote.canonical
+  title: Delete
+  weight: 10
+

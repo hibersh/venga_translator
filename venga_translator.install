@@ -1,0 +1,19 @@
+<?php
+
+/**
+ * @file
+ * Module install file of the venga translation management module.
+ */
+
+/**
+ * Implements hook_install().
+ *
+ * Disables destination in the views links.
+ */
+function venga_translator_install() {
+  $target = 'views.view.tmgmt_job_overview';
+  $settings = \Drupal::configFactory()->getEditable($target);
+  $display = $settings->get('display');
+  $display['default']['display_options']['fields']['operations']['destination'] = FALSE;
+  $settings->set('display', $display)->save();
+}

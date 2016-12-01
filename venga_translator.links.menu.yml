@@ -1,0 +1,6 @@
+# Quote menu items definition
+venga_translator_quote.admin.structure.settings:
+  title: Quote settings
+  description: 'Configure Quote entities'
+  route_name: venga_translator_quote.settings
+  parent: system.admin_structure

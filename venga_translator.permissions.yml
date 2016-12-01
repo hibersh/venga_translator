@@ -1,0 +1,13 @@
+add quote entities:
+  title: 'Create new Quote entities'
+
+administer quote entities:
+  title: 'Administer Quote entities'
+  description: 'Allow to access the administration form to configure Quote entities.'
+  restrict access: true
+
+delete quote entities:
+  title: 'Delete Quote entities'
+
+view quote entities:
+  title: 'View Quote entities'
