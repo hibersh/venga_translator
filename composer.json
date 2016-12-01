@@ -29,7 +29,6 @@
   ],
   "type": "drupal-module",
   "require": {
-    "drupal/tmgmt": "^1.0@rc",
     "drunomics/xtrf-rest-client": "^1.0@dev"
   }
 }
