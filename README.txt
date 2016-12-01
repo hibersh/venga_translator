@@ -7,13 +7,23 @@ https://drupal.org/project/tmgmt
 Installation
 ------------
 
- * (Recommended) To install via composer you should execute next command:
+First make sure your PHP version is 5.5 or newer.
+
+Via composer(recommended):
+ * To install via composer you should execute next command:
    composer require drupal/venga_translator
+
+Manual installation:
  * For a manual installation you should copy the whole module directory to your
    modules directory(e.g. DRUPAL_ROOT/modules) and activate it "admin/modules".
+ * You should also include the https://github.com/drunomics/xtrf-rest-client/
+   library into the project.
+
+Configuration
+-------------
+
  * The module provides a new translation source plugin, go to
    "admin/tmgmt/translators" to configure a Venga translator.
- * Make sure your PHP version is 5.5 or newer.
 
 Documentation
 -------------
