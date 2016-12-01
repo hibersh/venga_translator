@@ -1,0 +1,7 @@
+name = Venga Translator
+description = Configuration for the XTRF Translator for TMGMT.
+core = 7.x
+package = venga
+dependencies[] = entity
+dependencies[] = tmgmt
+dependencies[] = xtrf_translator

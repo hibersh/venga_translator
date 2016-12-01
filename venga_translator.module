@@ -1,0 +1,34 @@
+<?php
+/**
+ * @file
+ * Code for the venga_translator module.
+ */
+
+/**
+ * Implements hook_form_FORM_ID_alter() for the tmgmt_job_form() form.
+ */
+function venga_translator_form_tmgmt_job_form_alter(&$form, &$form_state, $form_id) {
+  // Force the venga translator to be chosen and hide select.
+  if (!empty($form['translator_wrapper']['translator'])) {
+    $form['translator_wrapper']['translator']['#access'] = FALSE;
+    $form['translator_wrapper']['translator']['#value'] = 'venga_translator';
+    $form['translator_wrapper']['#title'] = t('Venga checkout settings');
+
+    // Hide nested fieldgroup.
+    $form['translator_wrapper']['settings']['#type'] = 'container';
+  }
+
+  $form['actions']['checkout']['#value'] = t('Submit to Venga');
+
+  // Hide save job button if there are many items in the queue as it does not
+  // redirect.
+  $form['actions']['submit']['#access'] = tmgmt_ui_redirect_queue_count() ? FALSE : TRUE;
+}
+
+/**
+ * Implements hook_block_view_MODULE_DELTA_alter() for the help block.
+ */
+function venga_translator_block_view_system_help_alter(&$data, $block) {
+  // Remove reference to TMGMT from help text.
+  $data['content'] = str_replace('TMGMT ', '', $data['content']);
+}

@@ -1,0 +1,15 @@
+name = XTRF Translator
+description = A XTRF Translator for TMGMT.
+package = Translation Management
+core = 7.x
+dependencies[] = tmgmt
+dependencies[] = tmgmt_file
+dependencies[] = entity_translation
+dependencies[] = ctools
+dependencies[] = composer_manager
+files[] = xtrf_translator.plugin.inc
+files[] = xtrf_translator.ui.inc
+files[] = xtrf_translator.adapter.inc
+files[] = complex_types/login.class.inc
+files[] = complex_types/project.class.inc
+files[] = complex_types/workflow.class.inc

@@ -1,0 +1,220 @@
+<?php
+
+require_once 'xtrf_translator.settings.inc';
+
+/**
+ * @file
+ * Module file of the xtrf translation management module.
+ */
+
+/**
+ * Implements hook_tmgmt_translator_plugin_info().
+ */
+function xtrf_translator_tmgmt_translator_plugin_info() {
+  return array(
+    'xtrf' => array(
+      'label' => t('XTRF translator'),
+      'description' => t('XTRF Translator service.'),
+      'plugin controller class' => 'TMGMTXTRFTranslatorPluginController',
+      'ui controller class' => 'TMGMTXTRFTranslatorUIController',
+      'map remote languages' => true,
+    ),
+  );
+}
+
+/**
+ * Gets the XTRF adapter.
+ *
+ * @param TMGMTTranslator $translator
+ *   The tmgmt translator.
+ *
+ * @return XtrfTranslatorAdaptor
+ *   The adapter.
+ */
+function xtrf_translator_adapter($translator) {
+  $adapters = &drupal_static(__FUNCTION__);
+  if (!isset($adapters[$translator->name])) {
+    $config = array(
+      'base_uri' => $translator->getSetting('url'),
+      'username' => $translator->getSetting('username'),
+      'password' => $translator->getSetting('password'),
+    );
+    $adapter = \drunomics\XtrfClient\XtrfClient::create($config);
+    $adapters[$translator->name] = new XtrfTranslatorAdaptor($adapter);
+  }
+  return $adapters[$translator->name];
+}
+
+/**
+ * Implements hook_cron_queue_info().
+ */
+function xtrf_translator_cron_queue_info() {
+  $queues['xtrf_translator_retrieve_data'] = array(
+    'worker callback' => 'xtrf_translator_retrieve_data',
+    'time' => 120,
+  );
+  return $queues;
+}
+
+/**
+ * Implements a drupal queue worker.
+ *
+ * Downloads and imports files available from xtrf.
+ *
+ * @see xtrf_translator_cron_queue_info()
+ */
+function xtrf_translator_retrieve_data($data) {
+  $translator = xtrf_translator_get_translator($data['translator']);
+
+  if ($translator instanceof TMGMTTranslator && $translator->isAvailable()) {
+    $adapter = xtrf_translator_adapter($translator);
+    $job = tmgmt_job_load($data['tjid']);
+    if ($job) {
+      $result = $adapter->downloadTranslatedFile($translator, tmgmt_job_load($data['tjid']));
+      if ($result !== FALSE) {
+        watchdog('xtrf_translator', 'Finished processing translation file for Job !job: "%uri"', array(
+          '%uri' => $data['url'],
+          '!job' => $data['tjid']
+        ), WATCHDOG_INFO);
+      }
+      else {
+        // If download failed, add it to the queue again, for a later retry.
+        // Cancel it after 3 retries.
+        if (empty($data['retries'])) {
+          $data['retries'] = 0;
+        }
+        else {
+          $data['retries']++;
+        }
+        if ($data['retries'] <= 3) {
+          $queue = DrupalQueue::get('xtrf_translator_retrieve_data');
+          $queue->createItem($data);
+        }
+        else {
+          watchdog('xtrf_translator', "!job could not be downloaded after 3 retries.",
+            array(
+              '!job' => l(t('Job !id', array('!id' => $data['tjid'])), 'admin/config/regional/tmgmt/jobs/' . $data['tjid']),
+            ),
+            WATCHDOG_ERROR);
+        }
+      }
+    }
+    else {
+      watchdog('xtrf_translator', 'Removed job !job from queue - Failed to load job.', array('!job' => $data['tjid']), WATCHDOG_INFO);
+    }
+  }
+}
+
+/**
+ * Implements hook_cron().
+ */
+function xtrf_translator_cron() {
+  // Get all translators which a xtrf translators.
+  $translators = xtrf_translator_get_translator();
+  foreach ($translators as $translator) {
+    if ($translator->isAvailable()) {
+      $adapter = xtrf_translator_adapter($translator);
+      $jobs = xtrf_translator_load_jobs_by_translator($translator);
+
+      foreach ($jobs as $job) {
+        // Skip jobs with a remote reference, those have been handled already
+        // and e.g. are waiting for queue processing.
+        if (!empty($job->reference)) {
+          continue;
+        }
+
+        if ($has_output = $adapter->checkForTranslationOutput($job)) {
+          $queue = DrupalQueue::get('xtrf_translator_retrieve_data');
+          $data['tjid'] = $job->tjid;
+          $data['translator'] = $translator->name;
+          $queue->createItem($data);
+          watchdog('xtrf_translator', 'Queued fetching translation files for job: %tjid: %label', array('%tjid' => $job->tjid, '%label' => $job->label), WATCHDOG_INFO);
+        }
+        else {
+          watchdog('xtrf_translator', 'No new translated files for job %tjid: %label', array('%tjid' => $job->tjid, '%label' => $job->label), WATCHDOG_INFO);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Loads all active jobs for a translator.
+ */
+function xtrf_translator_load_jobs_by_translator($translator) {
+  module_load_include('module', 'tmgmt');
+
+  $query = new EntityFieldQuery();
+  $query->entityCondition('entity_type', 'tmgmt_job')
+    ->propertyCondition('translator', $translator->name)
+    ->propertyCondition('state', TMGMT_JOB_STATE_ACTIVE)
+    ->addMetaData('account', user_load(1)); // Run the query as user 1.
+
+  $result = $query->execute();
+  if (isset($result['tmgmt_job'])) {
+    $tjids = array_keys($result['tmgmt_job']);
+    return entity_load('tmgmt_job', $tjids);
+  }
+}
+
+
+/**
+ * Get a xtrf translator plugin.
+ *
+ * If name parameter is omitted, returns an array of translators.
+ *
+ * @param null|string $name
+ *
+ * @return TMGMTTranslator|array
+ *   The translator or a array of translators.
+ */
+function xtrf_translator_get_translator($name = NULL) {
+  $translators = &drupal_static(__FUNCTION__);
+  if (!isset($translators)) {
+    $translators = array();
+    $query = new EntityFieldQuery();
+
+    $result = $query
+      ->entityCondition('entity_type', 'tmgmt_translator')
+      ->propertyCondition('plugin', 'xtrf')
+      ->execute();
+
+    if (!empty($result['tmgmt_translator'])) {
+      $tmp = entity_load('tmgmt_translator', array_keys($result['tmgmt_translator']));
+      foreach ($tmp as $id => $translator) {
+        $translators[$translator->name] = $translator;
+      }
+    }
+  }
+  elseif (isset($name) && !isset($translators[$name])) {
+    $translators[$name] = tmgmt_translator_load($name);
+  }
+
+  if (isset($name)) {
+    return $translators[$name];
+  }
+  else {
+    return $translators;
+  }
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function xtrf_translator_form_alter(&$form, &$form_state, $form_id) {
+  if ($form_id == 'tmgmt_translator_form') {
+    $form['#submit'] = array_merge(array('xtrf_translator_plugin_settings_form_submit'), $form['#submit']);
+  }
+}
+
+/**
+ * Form submit callback for the plugin settings form.
+ *
+ * Prevents removing of token if they were left empty in the settings form.
+ */
+function xtrf_translator_plugin_settings_form_submit($form, &$form_state) {
+  if (isset($form_state['tmgmt_translator']) && $form_state['tmgmt_translator']->plugin == 'xtrf' && empty($form_state['values']['settings']['password'])) {
+    $translator = $form_state['tmgmt_translator'];
+    $form_state['values']['settings']['password'] = $translator->getSetting('password');
+  }
+}
