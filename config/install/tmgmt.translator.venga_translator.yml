@@ -1,0 +1,30 @@
+langcode: en
+status: true
+dependencies:
+  module:
+    - venga_translator
+name: venga_translator
+label: 'Venga translator'
+description: 'Venga Gateway Connect for Drupal.'
+auto_accept: false
+weight: null
+plugin: venga_translator
+settings:
+  url: 'https://68.168.111.88:8443/customer-api/'
+  username: C000159
+  password: 'a_#uN0V8'
+  allow_insecure_connection: 1
+  project_service: 'Simple translation workflow'
+  project_currency: 'American Dollar'
+  person: '2602'
+  send_back_to: '2603'
+  service_settings:
+    node:
+      default: 'Translation + Editing + Proofreading'
+      bundles:
+        translatable_node: inherit
+remote_languages_mappings:
+  en: EN-GB
+  de: DE-DE
+  fr: FR-FR
+  ja: ''
