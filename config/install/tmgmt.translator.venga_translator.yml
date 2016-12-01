@@ -20,7 +20,7 @@ settings:
   send_back_to: '2603'
   service_settings:
     node:
-      default: 'Translation + Editing + Proofreading'
+      default: inherit
       bundles:
         translatable_node: inherit
 remote_languages_mappings:

@@ -4,6 +4,8 @@ package: 'Translation Management'
 core: 8.x
 type: module
 dependencies:
+  - content_translation
   - tmgmt
+  - tmgmt_content
   - tmgmt_file
 configure: entity.tmgmt_translator.collection
