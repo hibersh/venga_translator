@@ -17,8 +17,19 @@
   "support": {
     "issues": "https://www.drupal.org/project/issues/venga_translator"
   },
+  "repositories": [
+    {
+      "type": "composer",
+      "url": "https://packages.drupal.org/8"
+    },
+    {
+      "type": "composer",
+      "url": "https://packagist.org/"
+    }
+  ],
   "type": "drupal-module",
   "require": {
-    "drunomics/xtrf-rest-client": "^1.0"
+    "drupal/tmgmt": "^1.0@rc",
+    "drunomics/xtrf-rest-client": "^1.0@dev"
   }
 }
