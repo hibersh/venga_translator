@@ -87,4 +87,4 @@ Development:
 - Alex Milkovskyi https://www.drupal.org/u/amilkovsky
 
 Initial development:
-- drunomics https://www.drupal.org/drunomics
+- drunomics https://drunomics.com/en
