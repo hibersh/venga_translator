@@ -23,7 +23,7 @@ required libraries.
     ```sh
     composer config repositories.drupal composer https://packages.drupal.org/8
     ```
-This allows Composer to find Address and the other Drupal modules.
+This allows Composer to find the module as well as other Drupal modules.
 
 2. Download the module:
 

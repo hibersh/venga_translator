@@ -29,6 +29,6 @@
   ],
   "type": "drupal-module",
   "require": {
-    "drunomics/xtrf-rest-client": "^1.0@dev"
+    "drunomics/xtrf-rest-client": "^1.0.0"
   }
 }
