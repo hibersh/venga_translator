@@ -32,11 +32,13 @@ class VengaJobListBuilder extends JobListBuilder {
     if (!empty($operations['manage'])) {
       $operations['manage']['url'] = $entity->toUrl();
     }
-    $translator = $entity->getTranslator();
-    if ($translator->getPluginId() == 'venga_translator') {
-      // There is no "abort" command in Venga. @see
-      // Drupal\venga_translator\Plugin\tmgmt\Translator\VengaTranslator::abortTranslation().
-      unset($operations['abort']);
+    if ($entity->hasTranslator()) {
+      $translator = $entity->getTranslator();
+      if ($translator->getPluginId() == 'venga_translator') {
+        // There is no "abort" command in Venga. @see
+        // Drupal\venga_translator\Plugin\tmgmt\Translator\VengaTranslator::abortTranslation().
+        unset($operations['abort']);
+      }
     }
     return $operations;
   }
