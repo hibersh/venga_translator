@@ -19,6 +19,10 @@
   },
   "repositories": [
     {
+      "type": "vcs",
+      "url": "https://github.com/hibersh/xtrf-rest-client"
+    },
+    {
       "type": "composer",
       "url": "https://packages.drupal.org/8"
     },
