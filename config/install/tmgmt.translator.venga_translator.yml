@@ -10,9 +10,9 @@ auto_accept: false
 weight: null
 plugin: venga_translator
 settings:
-  url: 'https://68.168.111.88:8443/customer-api/'
-  username: C000159
-  password: 'a_#uN0V8'
+  url: 'https://xtrf.vengacorp.com/customer-api/'
+  username: C000018
+  password: 'Menlo@123'
   allow_insecure_connection: 1
   project_service: 'Simple translation workflow'
   project_currency: 'American Dollar'
